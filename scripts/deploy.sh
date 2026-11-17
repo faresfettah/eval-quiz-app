@@ -67,12 +67,63 @@ if [ "$NB_ROLES" = "0" ]; then
     --assignee-principal-type ServicePrincipal --role AcrPull --scope "$ACR_ID" --output none
 fi
 
-# ---------- 3. Environnement Container Apps ----------
+# ---------- 3. Environnement Container Apps (mode standard) ----------
+# Incident J4 : sans précision, Azure crée désormais un environnement "Express".
+# Ce mode simplifié ne permet ni la communication interne entre applications
+# (notre backend interne), ni les suffixes de révision, ni les domaines
+# personnalisés. On demande donc explicitement à l'API Azure le mode standard
+# "WorkloadProfiles", avec le profil "Consumption" (facturation à l'usage).
 if ! az containerapp env show --name "$ENVIRONMENT" --resource-group "$RESOURCE_GROUP" --output none 2>/dev/null; then
-  echo ">> Création de l'environnement '$ENVIRONMENT' (plusieurs minutes)"
-  az containerapp env create --name "$ENVIRONMENT" --resource-group "$RESOURCE_GROUP" \
-    --location "$LOCATION" --logs-destination log-analytics --output none
+  echo ">> Espace Log Analytics '$LOG_WORKSPACE' (journaux des applications)"
+  az monitor log-analytics workspace create --resource-group "$RESOURCE_GROUP" \
+    --workspace-name "$LOG_WORKSPACE" --location "$LOCATION" --output none
+  WS_CUSTOMER_ID="$(az monitor log-analytics workspace show --resource-group "$RESOURCE_GROUP" \
+    --workspace-name "$LOG_WORKSPACE" --query customerId -o tsv)"
+  WS_KEY="$(az monitor log-analytics workspace get-shared-keys --resource-group "$RESOURCE_GROUP" \
+    --workspace-name "$LOG_WORKSPACE" --query primarySharedKey -o tsv)"
+
+  # La clé du Log Analytics est un secret : elle passe par un fichier
+  # temporaire lisible par moi seul, supprimé dès la fin du script.
+  PROPS_FILE="$(mktemp)"
+  chmod 600 "$PROPS_FILE"
+  trap 'rm -f "$PROPS_FILE"' EXIT
+  cat > "$PROPS_FILE" <<EOF
+{
+  "environmentMode": "WorkloadProfiles",
+  "workloadProfiles": [ { "name": "Consumption", "workloadProfileType": "Consumption" } ],
+  "appLogsConfiguration": {
+    "destination": "log-analytics",
+    "logAnalyticsConfiguration": { "customerId": "$WS_CUSTOMER_ID", "sharedKey": "$WS_KEY" }
+  }
+}
+EOF
+  echo ">> Création de l'environnement '$ENVIRONMENT' (mode WorkloadProfiles, plusieurs minutes)"
+  az resource create --resource-group "$RESOURCE_GROUP" --name "$ENVIRONMENT" \
+    --resource-type Microsoft.App/managedEnvironments --api-version "$ACA_API_VERSION" \
+    --location "$LOCATION" --properties @"$PROPS_FILE" --output none
+  rm -f "$PROPS_FILE"
 fi
+
+# Attente de la fin du provisionnement, puis contrôle du mode
+for _ in $(seq 1 60); do
+  ENV_STATE="$(az containerapp env show --name "$ENVIRONMENT" --resource-group "$RESOURCE_GROUP" \
+    --query properties.provisioningState -o tsv)"
+  case "$ENV_STATE" in
+    Succeeded) break ;;
+    Failed) echo "!! Échec de la création de l'environnement" >&2; exit 1 ;;
+  esac
+  echo "   environnement : $ENV_STATE..."
+  sleep 15
+done
+ENV_MODE="$(az resource show --resource-group "$RESOURCE_GROUP" --name "$ENVIRONMENT" \
+  --resource-type Microsoft.App/managedEnvironments --api-version "$ACA_API_VERSION" \
+  --query properties.environmentMode -o tsv)"
+if [ "$ENV_MODE" != "WorkloadProfiles" ]; then
+  echo "!! L'environnement '$ENVIRONMENT' est en mode '$ENV_MODE' (attendu : WorkloadProfiles)." >&2
+  echo "   Supprimez-le : az containerapp env delete -n $ENVIRONMENT -g $RESOURCE_GROUP --yes" >&2
+  exit 1
+fi
+echo ">> Environnement '$ENVIRONMENT' : $ENV_STATE, mode $ENV_MODE"
 
 # Suffixe de révision unique : chaque déploiement crée une révision
 # identifiable (et prend en compte les secrets mis à jour).
@@ -99,7 +150,7 @@ deploy_app() {
       secret_args=(--secrets "${SECRETS[@]}")
     fi
     az containerapp create --name "$app" --resource-group "$RESOURCE_GROUP" \
-      --environment "$ENVIRONMENT" --image "$image" \
+      --environment "$ENVIRONMENT" --workload-profile-name Consumption --image "$image" \
       --user-assigned "$IDENTITY_ID" --registry-identity "$IDENTITY_ID" --registry-server "$REGISTRY" \
       --ingress "$ingress" --target-port "$port" \
       --cpu 0.25 --memory 0.5Gi --min-replicas 0 --max-replicas 1 \

@@ -44,3 +44,8 @@ FRONTEND_APP="${FRONTEND_APP:-ca-quiz-frontend}"
 # Identité managée utilisée par les Container Apps pour tirer les images
 # (seul droit accordé : AcrPull sur l'ACR).
 IDENTITY="${IDENTITY:-id-quiz-acrpull}"
+# Espace Log Analytics qui reçoit les journaux des Container Apps
+LOG_WORKSPACE="${LOG_WORKSPACE:-log-quiz-app}"
+# Version de l'API Azure utilisée pour créer l'environnement en mode standard
+# (la CLI ne permet pas de choisir le mode ; voir deploy.sh, étape 3).
+ACA_API_VERSION="2026-07-01"
