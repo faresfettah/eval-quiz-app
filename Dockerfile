@@ -25,6 +25,13 @@ RUN npm run build
 # Nginx "unprivileged" : tourne sans root, écoute sur 8080.
 FROM nginxinc/nginx-unprivileged:1.31.7-alpine3.24 AS production
 
+# Sécurité (J2 - Trivy) : passage temporaire en root pour :
+# 1. mettre à jour les paquets Alpine (corrige brotli-libs CRITICAL,
+#    musl et libexpat HIGH) ;
+# 2. supprimer curl/libcurl, inutiles à Nginx (surface d'attaque réduite).
+USER root
+RUN apk upgrade --no-cache && apk del --no-cache curl
+
 # Adresse du backend par défaut (service Compose "backend").
 ENV BACKEND_URL=http://backend:3007
 
