@@ -73,17 +73,33 @@ flowchart LR
     B -. "HTTPS (API)" .-> R[Resend]
 ```
 
-## 8. Schéma — architecture cloud (cible)
+## 8. Schéma — architecture cloud (déployée au J4)
 
 ```mermaid
 flowchart LR
-    U[Navigateur] -- HTTPS --> F
-    subgraph ACA["Environnement Azure Container Apps"]
-        F["frontend<br/>ingress externe"] -- "ingress interne" --> B["backend<br/>:3007"]
+    U[Navigateur] -- "HTTPS" --> F
+    subgraph ACA["Environnement cae-quiz-app (WorkloadProfiles / Consumption) — Germany West Central"]
+        F["ca-quiz-frontend<br/>Nginx :8080<br/>ingress EXTERNE"] -- "/api, /health<br/>HTTPS interne" --> B["ca-quiz-backend<br/>Node.js :3007<br/>ingress INTERNE"]
     end
-    ACR[("Azure Container Registry")] -. "images taguées par commit" .-> F
+    subgraph FR["France Central"]
+        ACR[("ACR acrquizd78449<br/>images taguées par commit")]
+        ID["Identité managée<br/>id-quiz-acrpull (AcrPull)"]
+        LA[("Log Analytics<br/>log-quiz-app")]
+    end
+    ACR -. "pull avec l'identité" .-> F
     ACR -.-> B
-    B -- "TLS (sslmode=verify-full)" --> N[("Neon PostgreSQL")]
-    GH["GitHub Actions"] -- "build, Trivy, push" --> ACR
-    GH -- "mise à jour des révisions" --> ACA
+    ACA -. journaux .-> LA
+    B -- "TLS (sslmode=verify-full) — J5" --> N[("Neon PostgreSQL")]
+    GH["GitHub Actions — J6"] -- "build, Trivy, push" --> ACR
+    GH -- "nouvelle révision" --> ACA
 ```
+
+| Point | Local (Compose) | Cloud (Azure) |
+|---|---|---|
+| Entrée | `http://localhost:8087` | URL HTTPS du frontend (ingress externe) |
+| Frontend vers backend | `http://backend:3007` (nom du service) | `https://ca-quiz-backend.internal.<domaine>` (ingress interne) |
+| Base de données | Conteneur `db` + volume `pgdata` | Neon (externe), chaîne en secret `database-url` |
+| Secrets | `.env` (non versionné) | Secrets des Container Apps, alimentés par `.env.azure` (non versionné) |
+| Images | Construites localement | ACR, tag = SHA du commit |
+
+Pourquoi deux régions : France Central a refusé la création de l'environnement Container Apps faute de **capacité** (voir `preuves/J4`). L'environnement est donc en Germany West Central, région autorisée par la stratégie de l'abonnement, tandis que l'ACR est resté en France Central.
