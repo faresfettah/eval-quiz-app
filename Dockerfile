@@ -30,7 +30,8 @@ FROM nginxinc/nginx-unprivileged:1.31.7-alpine3.24 AS production
 #    musl et libexpat HIGH) ;
 # 2. supprimer curl/libcurl, inutiles à Nginx (surface d'attaque réduite).
 USER root
-RUN apk upgrade --no-cache && apk del --no-cache curl
+# TEST J6 (NE PAS FUSIONNER) : correctif J2 retiré volontairement pour
+# démontrer que la CI bloque une vulnérabilité CRITICAL (brotli-libs).
 
 # Adresse du backend par défaut (service Compose "backend").
 ENV BACKEND_URL=http://backend:3007
