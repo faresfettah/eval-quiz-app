@@ -1,0 +1,120 @@
+# =============================================================
+# J6-B — CD après fusion dans main
+#   1. reconstruit les images, tag = SHA court du commit (traçabilité)
+#   2. contrôle Trivy CRITICAL avant publication (défense en profondeur)
+#   3. connexion à Azure par OIDC : AUCUN mot de passe stocké dans GitHub
+#   4. publication dans ACR, puis mise à jour des Container Apps
+#      (une nouvelle révision par application)
+#   5. vérification : révisions actives + GET /health = 200
+#
+# Jamais déclenché par une Pull Request. L'identité Azure n'accepte que les
+# jetons de la branche main (voir scripts/setup-github-oidc.sh).
+# La CD ne connaît pas la chaîne PostgreSQL : seule l'image change,
+# les secrets restent ceux des Container Apps.
+# =============================================================
+name: CD
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:            # documentation et preuves : pas de redéploiement
+      - 'preuves/**'
+      - 'docs/**'
+      - 'architecture/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write            # demander le jeton OIDC présenté à Azure
+
+concurrency:
+  group: cd-production       # un seul déploiement à la fois, jamais annulé
+  cancel-in-progress: false
+
+env:                         # configuration NON secrète (voir scripts/config.sh)
+  ACR_NAME: acrquizd78449
+  RESOURCE_GROUP: rg-quiz-app
+  BACKEND_APP: ca-quiz-backend
+  FRONTEND_APP: ca-quiz-frontend
+  TRIVY_IMAGE: aquasec/trivy:0.76.1
+
+jobs:
+  deploy:
+    name: Publication ACR et mise à jour Container Apps
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Tag et registre
+        run: |
+          echo "TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "REGISTRY=${ACR_NAME}.azurecr.io" >> "$GITHUB_ENV"
+
+      - name: Construire les images
+        run: |
+          docker build --pull -t "$REGISTRY/quiz-backend:$TAG" ./backend
+          docker build --pull -t "$REGISTRY/quiz-frontend:$TAG" .
+
+      - name: Contrôle Trivy bloquant avant publication (CRITICAL)
+        run: |
+          for img in quiz-backend quiz-frontend; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache \
+              "$TRIVY_IMAGE" image --scanners vuln --severity CRITICAL --exit-code 1 --no-progress \
+              "$REGISTRY/$img:$TAG"
+          done
+
+      - name: Connexion à Azure (OIDC, sans mot de passe)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Publier les images dans ACR
+        run: |
+          az acr login --name "$ACR_NAME"
+          {
+            echo "### Images publiées dans ACR"
+            echo "| Image | Digest |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for img in quiz-backend quiz-frontend; do
+            docker push "$REGISTRY/$img:$TAG"
+            digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "$REGISTRY/$img:$TAG" | cut -d@ -f2)"
+            echo "| \`$img:$TAG\` | \`$digest\` |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Mettre à jour les Container Apps
+        run: |
+          az containerapp update --name "$BACKEND_APP" --resource-group "$RESOURCE_GROUP" \
+            --image "$REGISTRY/quiz-backend:$TAG" --output none
+          az containerapp update --name "$FRONTEND_APP" --resource-group "$RESOURCE_GROUP" \
+            --image "$REGISTRY/quiz-frontend:$TAG" --output none
+
+      - name: Vérifier le déploiement
+        run: |
+          FQDN="$(az containerapp show --name "$FRONTEND_APP" --resource-group "$RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn -o tsv)"
+          {
+            echo "### Révisions actives"
+            echo '```'
+            for app in "$BACKEND_APP" "$FRONTEND_APP"; do
+              az containerapp revision list --name "$app" --resource-group "$RESOURCE_GROUP" \
+                --query "[?properties.active].{revision:name, image:properties.template.containers[0].image, sante:properties.healthState}" \
+                --output table
+            done
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          code=000
+          for _ in $(seq 1 12); do      # démarrage à froid possible (0 réplica au repos)
+            code="$(curl -s -o health.json -w '%{http_code}' --max-time 30 "https://$FQDN/health" || true)"
+            [ "$code" = "200" ] && break
+            sleep 10
+          done
+          echo "GET https://$FQDN/health -> HTTP $code $(cat health.json 2>/dev/null)" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$code" = "200" ]

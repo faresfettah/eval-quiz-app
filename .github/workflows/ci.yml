@@ -1,0 +1,85 @@
+# =============================================================
+# J6-A — CI sur chaque Pull Request vers main
+#   1. construit les deux images (backend, frontend)
+#   2. Trivy : rapport HIGH/CRITICAL archivé, puis contrôle BLOQUANT :
+#      au moins une vulnérabilité CRITICAL => échec du job (code de sortie 1)
+#
+# Ne déploie RIEN et n'utilise AUCUN secret : une PR (même depuis un fork)
+# ne peut ni publier d'image ni accéder à Azure.
+# Le contrôle "Build et Trivy" est rendu obligatoire avant la fusion
+# (règle de protection de la branche main).
+# =============================================================
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  TRIVY_IMAGE: aquasec/trivy:0.76.1   # version figée, identique au poste local (J2)
+
+jobs:
+  build-trivy:
+    name: Build et Trivy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Actions figées par empreinte de commit (une étiquette peut être déplacée)
+      - name: Récupérer le code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Construire l'image backend
+        run: docker build --pull -t "quiz-backend:ci-${GITHUB_SHA::7}" ./backend
+
+      - name: Construire l'image frontend
+        run: docker build --pull -t "quiz-frontend:ci-${GITHUB_SHA::7}" .
+
+      - name: Rapport Trivy (HIGH et CRITICAL, archivé)
+        run: |
+          mkdir -p trivy-reports
+          for img in quiz-backend quiz-frontend; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache \
+              "$TRIVY_IMAGE" image --scanners vuln --severity HIGH,CRITICAL --no-progress \
+              "$img:ci-${GITHUB_SHA::7}" | tee "trivy-reports/$img.txt"
+          done
+
+      - name: Contrôle Trivy bloquant (CRITICAL)
+        run: |
+          {
+            echo "### Contrôle Trivy (politique : échec sur CRITICAL)"
+            echo "| Image | Résultat |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          status=0
+          for img in quiz-backend quiz-frontend; do
+            echo "::group::Trivy CRITICAL - $img"
+            if docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache \
+                 "$TRIVY_IMAGE" image --scanners vuln --severity CRITICAL --exit-code 1 \
+                 --skip-db-update --no-progress "$img:ci-${GITHUB_SHA::7}"; then
+              echo "| \`$img\` | ✅ aucune vulnérabilité CRITICAL |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| \`$img\` | ❌ vulnérabilité(s) CRITICAL : fusion bloquée |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error title=Trivy::Vulnérabilité CRITICAL dans $img"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+      - name: Archiver les rapports Trivy
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trivy-reports-${{ github.sha }}
+          path: trivy-reports/
+          retention-days: 30
