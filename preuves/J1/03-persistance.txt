@@ -1,0 +1,14 @@
+Tue Nov 17 11:29:55 CET 2026
+
+Volume pgdata créé le : 2026-11-17T10:17:45Z
+Conteneurs recréés le (après docker compose down puis up, SANS -v) :
+backend -> 2026-11-17 11:29:17 +0100 CET
+db -> 2026-11-17 11:29:17 +0100 CET
+frontend -> 2026-11-17 11:29:17 +0100 CET
+
+Données présentes après recréation des conteneurs :
+ firstname | score | total_questions |        completed_at        
+-----------+-------+-----------------+----------------------------
+ fares     |     9 |              20 | 2026-11-17 10:20:08.725672
+(1 row)
+

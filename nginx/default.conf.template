@@ -1,0 +1,46 @@
+# Configuration Nginx du frontend (modèle).
+# Au démarrage, l'image Nginx remplace ${BACKEND_URL} par la valeur de la
+# variable d'environnement, puis écrit le résultat dans /etc/nginx/conf.d/.
+# Local : BACKEND_URL=http://backend:3007 (nom du service Compose).
+# Azure : BACKEND_URL=adresse interne de la Container App backend (J4).
+
+server {
+    # Port 8080 : l'image Nginx tourne sans root et ne peut pas utiliser le port 80.
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+
+    # Application principale (quiz)
+    location / {
+        index index.html;
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Page d'administration
+    location = /gestion-quiz {
+        try_files /gestion-quiz.html =404;
+    }
+
+    # API : transmise au backend
+    location /api/ {
+        proxy_pass ${BACKEND_URL};
+        proxy_http_version 1.1;
+        # $proxy_host = hôte du backend : nécessaire sur Azure, où l'ingress
+        # du backend route les requêtes selon l'en-tête Host.
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Santé du backend
+    location = /health {
+        proxy_pass ${BACKEND_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+    }
+}
