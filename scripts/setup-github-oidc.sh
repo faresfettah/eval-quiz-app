@@ -35,14 +35,33 @@ CLIENT_ID="$(az identity show --name "$GH_IDENTITY" --resource-group "$RESOURCE_
 PRINCIPAL_ID="$(az identity show --name "$GH_IDENTITY" --resource-group "$RESOURCE_GROUP" --query principalId -o tsv)"
 
 # ---------- 2. Confiance envers GitHub (OIDC), branche main uniquement ----------
-if ! az identity federated-credential show --name github-main --identity-name "$GH_IDENTITY" \
-     --resource-group "$RESOURCE_GROUP" --output none 2>/dev/null; then
-  echo ">> Fédération OIDC : $SUBJECT"
-  az identity federated-credential create --name github-main --identity-name "$GH_IDENTITY" \
-    --resource-group "$RESOURCE_GROUP" \
-    --issuer "https://token.actions.githubusercontent.com" \
-    --subject "$SUBJECT" --audiences "api://AzureADTokenExchange" --output none
+# Incident J6 : GitHub peut présenter le sujet dans un format "immuable" qui
+# contient les numéros du compte et du dépôt :
+#   repo:<compte>@<id-compte>/<dépôt>@<id-dépôt>:ref:refs/heads/main
+# Le sujet doit correspondre EXACTEMENT, sinon Azure refuse (AADSTS700213).
+# On déclare donc les deux formats (toujours la seule branche main).
+add_federation() {   # $1 = nom de la fédération, $2 = sujet
+  if ! az identity federated-credential show --name "$1" --identity-name "$GH_IDENTITY" \
+       --resource-group "$RESOURCE_GROUP" --output none 2>/dev/null; then
+    echo ">> Fédération OIDC : $2"
+    az identity federated-credential create --name "$1" --identity-name "$GH_IDENTITY" \
+      --resource-group "$RESOURCE_GROUP" \
+      --issuer "https://token.actions.githubusercontent.com" \
+      --subject "$2" --audiences "api://AzureADTokenExchange" --output none
+  fi
+}
+add_federation github-main "$SUBJECT"
+
+# Numéros du compte et du dépôt (API publique de GitHub, ou variables
+# GITHUB_OWNER_ID / GITHUB_REPO_ID si l'API est indisponible)
+if [ -z "${GITHUB_OWNER_ID:-}" ] || [ -z "${GITHUB_REPO_ID:-}" ]; then
+  IDS="$(curl -fsS "https://api.github.com/repos/$GITHUB_REPO" \
+    | python3 -I -c "import sys, json; d = json.load(sys.stdin, strict=False); print(d['owner']['id'], d['id'])")"
+  GITHUB_OWNER_ID="${IDS% *}"
+  GITHUB_REPO_ID="${IDS#* }"
 fi
+add_federation github-main-ids \
+  "repo:${GITHUB_REPO%%/*}@${GITHUB_OWNER_ID}/${GITHUB_REPO#*/}@${GITHUB_REPO_ID}:ref:refs/heads/main"
 
 # ---------- 3. Rôles (portée la plus étroite possible) ----------
 assign_role() {   # $1 = rôle, $2 = portée
