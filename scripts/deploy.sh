@@ -85,8 +85,9 @@ if ! az containerapp env show --name "$ENVIRONMENT" --resource-group "$RESOURCE_
   # La clé du Log Analytics est un secret : elle passe par un fichier
   # temporaire lisible par moi seul, supprimé dès la fin du script.
   PROPS_FILE="$(mktemp)"
+  ERR_FILE="$(mktemp)"
   chmod 600 "$PROPS_FILE"
-  trap 'rm -f "$PROPS_FILE"' EXIT
+  trap 'rm -f "$PROPS_FILE" "$ERR_FILE"' EXIT
   cat > "$PROPS_FILE" <<EOF
 {
   "environmentMode": "WorkloadProfiles",
@@ -97,11 +98,35 @@ if ! az containerapp env show --name "$ENVIRONMENT" --resource-group "$RESOURCE_
   }
 }
 EOF
-  echo ">> Création de l'environnement '$ENVIRONMENT' (mode WorkloadProfiles, plusieurs minutes)"
-  az resource create --resource-group "$RESOURCE_GROUP" --name "$ENVIRONMENT" \
-    --resource-type Microsoft.App/managedEnvironments --api-version "$ACA_API_VERSION" \
-    --location "$LOCATION" --properties @"$PROPS_FILE" --output none
+  # Incident J4 (bis) : Azure peut refuser un nouvel environnement dans une
+  # région saturée (erreur de CAPACITÉ, pas de quota ; vécu en France Central).
+  # On essaie donc, dans l'ordre, les régions autorisées par la stratégie de
+  # l'abonnement (voir preuves/J0). L'ACR reste en France Central.
+  ENV_CREATED=""
+  for region in $ACA_LOCATIONS; do
+    echo ">> Création de l'environnement '$ENVIRONMENT' en '$region' (mode WorkloadProfiles, plusieurs minutes)"
+    if az resource create --resource-group "$RESOURCE_GROUP" --name "$ENVIRONMENT" \
+         --resource-type Microsoft.App/managedEnvironments --api-version "$ACA_API_VERSION" \
+         --location "$region" --properties @"$PROPS_FILE" --output none 2>"$ERR_FILE"; then
+      ENV_CREATED="$region"
+      break
+    fi
+    if grep -qiE "MaxNumberOfEnvironmentsInSubExceeded|capacity|HeavyUsage" "$ERR_FILE"; then
+      echo "   !! Capacité indisponible en '$region' pour cet abonnement : région suivante"
+      # Un essai raté peut laisser un environnement en échec : on le supprime
+      if az containerapp env show --name "$ENVIRONMENT" --resource-group "$RESOURCE_GROUP" --output none 2>/dev/null; then
+        az containerapp env delete --name "$ENVIRONMENT" --resource-group "$RESOURCE_GROUP" --yes --output none
+      fi
+      continue
+    fi
+    cat "$ERR_FILE" >&2   # autre erreur : on l'affiche et on s'arrête
+    exit 1
+  done
   rm -f "$PROPS_FILE"
+  if [ -z "$ENV_CREATED" ]; then
+    echo "!! Aucune région disponible parmi : $ACA_LOCATIONS. Réessayer plus tard." >&2
+    exit 1
+  fi
 fi
 
 # Attente de la fin du provisionnement, puis contrôle du mode
@@ -123,7 +148,9 @@ if [ "$ENV_MODE" != "WorkloadProfiles" ]; then
   echo "   Supprimez-le : az containerapp env delete -n $ENVIRONMENT -g $RESOURCE_GROUP --yes" >&2
   exit 1
 fi
-echo ">> Environnement '$ENVIRONMENT' : $ENV_STATE, mode $ENV_MODE"
+ENV_REGION="$(az containerapp env show --name "$ENVIRONMENT" --resource-group "$RESOURCE_GROUP" \
+  --query location -o tsv)"
+echo ">> Environnement '$ENVIRONMENT' : $ENV_STATE, mode $ENV_MODE, région $ENV_REGION"
 
 # Suffixe de révision unique : chaque déploiement crée une révision
 # identifiable (et prend en compte les secrets mis à jour).

@@ -38,6 +38,11 @@ if [ -z "${TAG:-}" ]; then
 fi
 
 # Azure Container Apps (J4)
+# Régions essayées, dans l'ordre, pour l'environnement Container Apps
+# (toutes autorisées par la stratégie de l'abonnement). France Central a
+# refusé la création faute de capacité : Germany West Central (Francfort) en
+# premier, proche de la France et de la base Neon (J5).
+ACA_LOCATIONS="${ACA_LOCATIONS:-germanywestcentral spaincentral austriaeast francecentral}"
 ENVIRONMENT="${ENVIRONMENT:-cae-quiz-app}"
 BACKEND_APP="${BACKEND_APP:-ca-quiz-backend}"
 FRONTEND_APP="${FRONTEND_APP:-ca-quiz-frontend}"
