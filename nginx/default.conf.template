@@ -11,6 +11,11 @@ server {
 
     root /usr/share/nginx/html;
 
+    # Azure : BACKEND_URL est en HTTPS (adresse interne du backend). L'ingress
+    # Azure a besoin du nom d'hôte dans la négociation TLS (SNI) pour router.
+    # Sans effet en local, où BACKEND_URL est en HTTP.
+    proxy_ssl_server_name on;
+
     # Application principale (quiz)
     location / {
         index index.html;

@@ -27,7 +27,20 @@ ACR_SKU="${ACR_SKU:-Basic}"   # le moins cher, suffisant pour le projet
 BACKEND_IMAGE="quiz-backend"
 FRONTEND_IMAGE="quiz-frontend"
 
+# Tag des images = SHA court du commit Git (traçabilité : on sait quel code
+# est dans l'image). Suffixe "-dirty" si des fichiers suivis par Git sont
+# modifiés sans commit. La CI peut imposer son tag : TAG=<sha> ./scripts/...
+if [ -z "${TAG:-}" ]; then
+  TAG="$(git rev-parse --short HEAD)"
+  if ! git diff --quiet HEAD; then
+    TAG="${TAG}-dirty"
+  fi
+fi
+
 # Azure Container Apps (J4)
 ENVIRONMENT="${ENVIRONMENT:-cae-quiz-app}"
 BACKEND_APP="${BACKEND_APP:-ca-quiz-backend}"
 FRONTEND_APP="${FRONTEND_APP:-ca-quiz-frontend}"
+# Identité managée utilisée par les Container Apps pour tirer les images
+# (seul droit accordé : AcrPull sur l'ACR).
+IDENTITY="${IDENTITY:-id-quiz-acrpull}"
