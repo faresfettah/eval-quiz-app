@@ -1,0 +1,27 @@
+# Contexte de build du FRONTEND : on exclut tout ce qui n'est pas utile
+# à "npm run build", et surtout les secrets.
+
+# Secrets et gestion de version
+.env
+.env.*
+!.env.example
+.git
+.github
+
+# Dépendances et builds locaux (refaits dans l'image)
+node_modules
+dist
+
+# Autres composants et fichiers du projet
+backend
+database
+docs
+preuves
+scripts
+architecture
+Dockerfile
+.dockerignore
+docker-compose*.yml
+README.md
+*.log
+.DS_Store

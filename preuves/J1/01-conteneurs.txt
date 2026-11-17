@@ -1,0 +1,6 @@
+Tue Nov 17 11:29:54 CET 2026
+
+NAME                       IMAGE                       COMMAND                  SERVICE    CREATED          STATUS                    PORTS
+eval-quiz-app-backend-1    quiz-backend:local          "docker-entrypoint.s…"   backend    38 seconds ago   Up 31 seconds (healthy)   3007/tcp
+eval-quiz-app-db-1         postgres:17.12-alpine3.24   "docker-entrypoint.s…"   db         38 seconds ago   Up 37 seconds (healthy)   5432/tcp
+eval-quiz-app-frontend-1   quiz-frontend:local         "/docker-entrypoint.…"   frontend   38 seconds ago   Up 21 seconds             0.0.0.0:8087->8080/tcp, [::]:8087->8080/tcp

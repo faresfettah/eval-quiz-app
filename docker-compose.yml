@@ -1,0 +1,69 @@
+# Quiz App — environnement LOCAL
+# Lancement : docker compose up -d --build
+# Les valeurs viennent du fichier .env (copie de .env.example, jamais versionnée).
+
+services:
+
+  # ---------- Base de données ----------
+  db:
+    image: postgres:17.12-alpine3.24
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      # Données persistantes (survivent à "docker compose down")
+      - pgdata:/var/lib/postgresql/data
+      # Schéma exécuté UNIQUEMENT au premier démarrage (volume vide)
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [quiz-net]
+    restart: unless-stopped
+
+  # ---------- API ----------
+  backend:
+    build: ./backend
+    image: quiz-backend:local
+    environment:
+      PORT: 3007
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      FROM_EMAIL: ${FROM_EMAIL}
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+    depends_on:
+      db:
+        condition: service_healthy   # attendre que PostgreSQL accepte les connexions
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3007/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [quiz-net]
+    restart: unless-stopped
+    # Pas de "ports:" : le backend n'est joignable que via Nginx.
+
+  # ---------- Frontend + reverse proxy ----------
+  frontend:
+    build: .
+    image: quiz-frontend:local
+    environment:
+      BACKEND_URL: http://backend:3007
+    ports:
+      - "8087:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [quiz-net]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+
+networks:
+  quiz-net:
