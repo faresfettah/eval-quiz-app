@@ -34,7 +34,7 @@ docker push "$REGISTRY/$FRONTEND_IMAGE:$TAG"
 
 echo ">> Images présentes dans l'ACR :"
 for repo in "$BACKEND_IMAGE" "$FRONTEND_IMAGE"; do
-  az acr manifest list-metadata --registry "$ACR_NAME" --name "$repo" \
+  az acr manifest list-metadata --only-show-errors --registry "$ACR_NAME" --name "$repo" \
     --query "[].{image:'$repo', tags:join(', ', tags || \`[]\`), digest:digest, date:createdTime}" \
     --output table
 done
