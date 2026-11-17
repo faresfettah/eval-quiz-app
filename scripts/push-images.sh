@@ -4,20 +4,18 @@
 #      et les publie dans l'Azure Container Registry.
 #
 # Prérequis : Docker démarré, "az login" fait, ACR créé (acr-setup.sh).
-# Tag       : SHA court du commit (ex. d5cf53f) -> on sait exactement
-#             quel code est dans l'image. Si des fichiers suivis par Git
-#             sont modifiés sans commit, le tag reçoit le suffixe "-dirty".
+# Tag       : SHA court du commit (ex. d5cf53f), calculé dans config.sh.
+#             On sait exactement quel code est dans l'image. Suffixe "-dirty"
+#             si des fichiers suivis par Git sont modifiés sans commit.
 #             La CI pourra imposer son propre tag : TAG=<sha> ./scripts/push-images.sh
 # =============================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/config.sh
 
-TAG="${TAG:-$(git rev-parse --short HEAD)}"
-if ! git diff --quiet HEAD; then
-  echo "!! Modifications non commitées : tag '${TAG}-dirty'"
-  TAG="${TAG}-dirty"
-fi
+case "$TAG" in
+  *-dirty) echo "!! Modifications non commitées : l'image sera taguée '$TAG'" ;;
+esac
 
 REGISTRY="$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)"
 echo ">> Registre : $REGISTRY  |  tag : $TAG"
@@ -36,7 +34,7 @@ docker push "$REGISTRY/$FRONTEND_IMAGE:$TAG"
 
 echo ">> Images présentes dans l'ACR :"
 for repo in "$BACKEND_IMAGE" "$FRONTEND_IMAGE"; do
-  az acr manifest list-metadata --registry "$ACR_NAME" --name "$repo" \
+  az acr manifest list-metadata --only-show-errors --registry "$ACR_NAME" --name "$repo" \
     --query "[].{image:'$repo', tags:join(', ', tags || \`[]\`), digest:digest, date:createdTime}" \
     --output table
 done

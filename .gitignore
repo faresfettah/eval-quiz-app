@@ -69,6 +69,7 @@ web_modules/
 .env
 .env.*
 !.env.example
+!.env.azure.example
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -158,6 +159,7 @@ vite.config.ts.timestamp-*
 .env
 .env.*
 !.env.example
+!.env.azure.example
 
 node_modules/
 dist/
