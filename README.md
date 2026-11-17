@@ -50,6 +50,66 @@ Lisez les documents dans cet ordre :
 - Ne commitez jamais de mots de passe, URL PostgreSQL contenant des identifiants, clés API, secrets GitHub/GitLab ou fichiers `.env` réels.
 - Une démonstration validée reste acquise même si les ressources cloud sont supprimées ensuite.
 
+## Réalisation du groupe : guide d'exploitation
+
+Schémas et analyse : [architecture/README.md](architecture/README.md). Preuves datées par jalon : [preuves/](preuves/) (J0 à J6).
+
+### Prérequis
+
+- Docker (avec Docker Compose), Git, et un compte GitHub (fork de ce dépôt).
+- Azure CLI 2.90 ou plus, un abonnement **Azure for Students** actif (`az login`). La stratégie de l'abonnement n'autorise que certaines régions : voir `preuves/J0`.
+- Un compte **Neon** (PostgreSQL managé) pour la base cloud.
+- Trivy, en local ou via Docker : `docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.76.1 ...`
+
+### 1. Lancement local (Docker Compose)
+
+```bash
+cp .env.example .env          # puis remplacer les valeurs (jamais versionné)
+docker compose up -d --build  # frontend (Nginx) + backend + PostgreSQL
+curl http://localhost:8087/health
+```
+
+L'application est sur http://localhost:8087. Les données PostgreSQL sont dans le volume `pgdata` : elles survivent à `docker compose down` / `up`. Seul `docker compose down -v` les efface.
+
+### 2. Sécurité des images (Trivy)
+
+```bash
+trivy image --scanners vuln --severity HIGH,CRITICAL quiz-frontend:local
+trivy image --scanners vuln --severity CRITICAL --exit-code 1 quiz-backend:local   # contrôle bloquant
+```
+
+Les rapports avant/après et les vulnérabilités résiduelles sont dans `preuves/J2/rapport-trivy.md`.
+
+### 3. Déploiement cloud (Azure Container Apps et Neon)
+
+```bash
+cp .env.azure.example .env.azure        # secrets cloud (jamais versionné)
+./scripts/set-database-url.sh           # chaîne Neon copiée -> .env.azure (sslmode=verify-full)
+./scripts/check-db.sh                   # test TLS avec le pilote du backend
+./scripts/init-db.sh                    # schéma via database/init.sql (une fois)
+./scripts/deploy.sh                     # ACR + images (tag = commit) + environnement + 2 Container Apps
+```
+
+`deploy.sh` est relançable : il met à jour ce qui existe (nouvelle révision). Il crée l'environnement en mode **WorkloadProfiles** et choisit une région disponible parmi `ACA_LOCATIONS` (voir `preuves/J4`). Les secrets vont dans les **secrets** des Container Apps, jamais dans les images.
+
+### 4. CI/CD (GitHub Actions)
+
+```bash
+./scripts/setup-github-oidc.sh    # identité Azure fédérée (OIDC), affiche les 3 identifiants
+```
+
+1. Déclarer `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` et `AZURE_SUBSCRIPTION_ID` dans *Settings > Secrets and variables > Actions*.
+2. Protéger `main` : PR obligatoire, contrôle requis **`Build et Trivy`**, pas de contournement.
+3. Démonstration : modifier une question (`questions_*.js`) sur une branche `feature/*`, puis ouvrir une PR. La CI construit les images et lance Trivy. Après la fusion, la CD publie dans l'ACR et crée de nouvelles révisions. Voir `preuves/J6/cicd.md`.
+
+### 5. Nettoyage (maîtrise des coûts)
+
+```bash
+./scripts/destroy.sh   # supprime le groupe rg-quiz-app : ACR, environnement, apps, identités, logs
+```
+
+L'ACR (SKU Basic) est facturé à la journée : on le supprime dès que les jalons sont validés et les preuves conservées. La base Neon (offre gratuite) se supprime dans la console Neon si besoin.
+
 ## Usage de l'IA
 
 - **Outil :** Claude Code, un assistant IA d'Anthropic intégré à VS Code.
