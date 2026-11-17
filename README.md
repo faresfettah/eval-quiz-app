@@ -49,3 +49,17 @@ Lisez les documents dans cet ordre :
 - Versionnez les fichiers de configuration, les scripts et les workflows **que vous produisez**.
 - Ne commitez jamais de mots de passe, URL PostgreSQL contenant des identifiants, clés API, secrets GitHub/GitLab ou fichiers `.env` réels.
 - Une démonstration validée reste acquise même si les ressources cloud sont supprimées ensuite.
+
+## Usage de l'IA
+
+- **Outil :** Claude Code, un assistant IA d'Anthropic intégré à VS Code.
+- **Tâches assistées :** analyse du code fourni (ports, variables, dépendance à la base), rédaction et relecture des Dockerfiles, du `docker-compose.yml` et des scripts Azure CLI (`scripts/`), diagnostic des incidents (environnement Container Apps « Express », capacité saturée en France Central, option `channel_binding` ignorée par le pilote `pg`), rédaction des rapports de `preuves/`.
+- **Vérification des propositions :**
+  - lancement réel en local (Compose, persistance du volume) ;
+  - analyses Trivy avant et après les corrections ;
+  - tests « à blanc » des scripts avec des commandes Azure simulées ;
+  - lecture de la documentation officielle Microsoft et Neon ;
+  - tests HTTP sur Azure (`/health`, API, isolement du backend) et lecture des journaux.
+
+  Les sorties de ces tests sont conservées dans `preuves/`.
+- **Secrets :** aucun secret n'est versionné, et les valeurs de `.env` et `.env.azure` ne sont pas transmises à l'assistant. **Exception, signalée :** une chaîne de connexion Neon a été collée une fois par erreur dans la conversation. Le projet Neon concerné a été supprimé aussitôt, ce qui a rendu le mot de passe inutilisable (voir `preuves/J5`). Ensuite, l'assistant a été **autorisé explicitement** à utiliser la CLI Neon (compte connecté par navigateur) pour recréer le projet. La nouvelle chaîne a été transmise directement de la CLI au fichier `.env.azure` (`neon connection-string ... | scripts/set-database-url.sh`), sans jamais être affichée.
